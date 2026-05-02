@@ -1,379 +1,600 @@
-from capymoa.base import Classifier
-from moa.classifiers.lazy.neighboursearch import KDTree
-from moa.classifiers.lazy.neighboursearch import LinearNNSearch
-from com.yahoo.labs.samoa.instances import Instances
-import math
-
-##############################################################
-####################### HELPER WINDOW ########################
-##############################################################
-class newWindow():
-    def __init__(self, schema, instances=None):
-        self.window = Instances(schema.get_moa_header(), 0)
-        self.schema = schema
-        if instances is not None:
-            for i in range(instances.numInstances()):
-                self.window.add(instances.get(i))
-    
-    def add_instance(self, instance):
-        self.window.add(instance.java_instance.getData())
-
-    def add_window(self, nwindow):
-        rw = nwindow.get_window()
-        for i in range(nwindow.size()):
-            self.window.add(rw.get(i))
-
-    def remove_instance(self, position=0):
-        self.window.delete(position)
-
-    def get_instance(self, position=0):
-        return self.window.get(position)
-
-    def get_window(self):
-        return self.window
-    
-    def get_schema(self):
-        return self.schema
-    
-    def size(self):
-        return self.window.numInstances()
-    
-##############################################################
-###################### HELPER NNSEARCH #######################
-##############################################################
-class SearchNeighbours():
-    def __init__(self, search_method):
-        assert search_method in ["LinearNNSearch", "KDTree"]
-        self.search_method_str = search_method
-        if self.search_method_str == "LinearNNSearch":
-            self.search_method = LinearNNSearch()
-        else:
-            self.search_method = KDTree()
-
-    def do_search(self, window, instance, arg_k):
-        self.search_method.setInstances(window.get_window())
-        k = min(arg_k, window.size())
-        neighbors = self.search_method.kNearestNeighbours(instance.java_instance.getData(), k)
-        return newWindow(window.get_schema(), neighbors)
-    
-##############################################################
-###################### HELPER DISTANCE #######################
-##############################################################
-def distanceMath(instance1, instance2):
-	if 'LabeledInstance' in type(instance1).__name__:
-		inst1 = instance1.java_instance.getData().toDoubleArray()
-	if 'LabeledInstance' in type(instance2).__name__:
-		inst2 = instance2.java_instance.getData().toDoubleArray()
-	elif 'InstanceImpl' in type(instance2).__name__:
-		inst2 = instance2.toDoubleArray()
-	return math.sqrt(sum([(inst1[i] - inst2[i])**2 for i in range(len(inst1)-1)]))
-    
-##############################################################
-######################## KNN CLASSES #########################
-##############################################################
-class KNNBase(Classifier):
-    def __init__(self, schema, k=3, window_size=1000, search_method="LinearNNSearch"):
-        super().__init__(schema)
-        self.k = k
-        self.window_size = window_size
-        self.search = SearchNeighbours(search_method)
-        self.window = newWindow(schema)
-
-    def __str__(self):
-        return "Base kNN"
-
-    def train(self, instance):
-        if self.window.size() >= self.window_size:
-            self.window.remove_instance()
-        self.window.add_instance(instance)
-    
-    def predict(self, instance):
-        """
-        Returns the k-NN predictions for a given instance.
-        Uses mean/median for regression or majority vote for classification.
-        """
-        try:
-            if self.window and self.window.size() > 0:
-                # Find k nearest neighbors
-                neighbors = self.search.do_search(self.window, instance, self.k)
-                # Vote for the most common class among the k closest neighbors
-                votes = [0] * (self.schema.get_num_classes())
-                for i in range(neighbors.size()):
-                    class_idx = int(neighbors.get_instance(i).classValue())
-                    votes[class_idx] += 1
-                return votes.index(max(votes))
-
-        except Exception as e:
-            print("Error: kNN search failed.", e)
-            return 0
-
-    def predict_proba(self, instance):
-        pass
-
-class KNNBase3(Classifier):
-    def __init__(self, schema, k=3, window_size=1000, search_method="LinearNNSearch"):
-        super().__init__(schema)
-        self.k = k
-        self.window_size = window_size
-        self.search = SearchNeighbours(search_method)
-        self.window = newWindow(schema)
-
-    def __str__(self):
-        return "Base3 kNN"
-
-    def train(self, instance):
-        if self.window.size() >= self.window_size:
-            self.window.remove_instance()
-        self.window.add_instance(instance)
-    
-    def predict(self, instance):
-        """
-        Returns the k-NN predictions for a given instance.
-        Uses mean/median for regression or majority vote for classification.
-        """
-        try:
-            if self.window and self.window.size() > 0:
-                # Find k nearest neighbors
-                neighbors = self.search.do_search(self.window, instance, self.k)
-                # Vote for the most common class among the k closest neighbors
-                votes = [0] * (self.schema.get_num_classes())
-                for i in range(neighbors.size()):
-                    class_idx = int(neighbors.get_instance(i).classValue())
-                    votes[class_idx] += 1
-                return votes.index(max(votes))
-
-        except Exception as e:
-            print("Error: kNN search failed.", e)
-            return 0
-
-    def predict_proba(self, instance):
-        pass
-
-
-
-class KNN_cw(Classifier):
-    def __init__(self, schema, k=3, window_size=100, search_method="LinearNNSearch"):
-        super().__init__(schema)
-        self.k = k
-        self.w = window_size
-        self.search = SearchNeighbours(search_method)
-
-        # dictionary: class -> window
-        self.class_windows = {}
-
-    def __str__(self):
-        return "kNN-cw"
-
-    def train(self, instance):
-        class_label = int(instance.java_instance.getData().classValue())
-
-        if class_label not in self.class_windows:
-            self.class_windows[class_label] = newWindow(self.schema)
-
-        window = self.class_windows[class_label]
-
-        if window.size() >= self.w:
-            window.remove_instance()
-
-        window.add_instance(instance)
-
-    def predict(self, instance):
-        try:
-            all_neighbors = newWindow(self.schema)
-
-            # Step 1: get k from each class
-            for class_label, window in self.class_windows.items():
-                if window.size() == 0:
-                    continue
-
-                neighbors = self.search.do_search(window, instance, self.k)
-                all_neighbors.add_window(neighbors)
-
-            # Step 2: global k selection
-            if all_neighbors.size() == 0:
-                return 0
-
-            final_neighbors = self.search.do_search(all_neighbors, instance, self.k)
-
-            # Step 3: majority vote
-            votes = [0] * self.schema.get_num_classes()
-
-            for i in range(final_neighbors.size()):
-                class_idx = int(final_neighbors.get_instance(i).classValue())
-                votes[class_idx] += 1
-
-            return votes.index(max(votes))
-
-        except Exception as e:
-            print("Error in KNN-cw:", e)
-            return 0
-        
-    def predict_proba(self, instance):
-        return None
-        
-
-import random
-import math
-
-class KNN_asw(Classifier):
-    def __init__(self, schema, k=3, window_size=100, search_method="LinearNNSearch"):
-        super().__init__(schema)
-        self.k = k
-        self.w = window_size
-        self.search = SearchNeighbours(search_method)
-        self.window = newWindow(schema)
-
-        # track ages
-        self.ages = []
-
-    def __str__(self):
-        return "kNN-asw"
-
-    def train(self, instance):
-        # increase all ages
-        self.ages = [a + 1 for a in self.ages]
-
-        # add new instance
-        self.window.add_instance(instance)
-        self.ages.append(1)
-
-        # if exceeds window size → remove probabilistically
-        if self.window.size() > self.w:
-            weights = [math.pow(1.2, age) for age in self.ages]
-            total = sum(weights)
-
-            probs = [w / total for w in weights]
-
-            # choose index to remove
-            remove_idx = random.choices(range(len(self.ages)), weights=probs)[0]
-
-            self.window.remove_instance(remove_idx)
-            self.ages.pop(remove_idx)
-
-    def predict(self, instance):
-        try:
-            if self.window.size() == 0:
-                return 0
-
-            neighbors = self.search.do_search(self.window, instance, self.k)
-
-            votes = [0] * self.schema.get_num_classes()
-
-            for i in range(neighbors.size()):
-                class_idx = int(neighbors.get_instance(i).classValue())
-                votes[class_idx] += 1
-
-            return votes.index(max(votes))
-
-        except Exception as e:
-            print("Error in KNN-asw:", e)
-            return 0
-        
-    def predict_proba(self, instance):
-        return None
-        
-
-import time
-import csv
-import random
-
-from capymoa.datasets import Electricity, RBFm_100k
-
-
-STUDENT_ID = "1706625"
-random.seed(int(STUDENT_ID))
-
-
-algorithms = [
-    ("knn", KNNBase),
-    ("knn-cw", KNN_cw),
-    ("knn-asw", KNN_asw),
-]
-
-configs = [
-    (3, 500),
-    (21, 500),
-    (3, 100),
-    (21, 100),
-]
-
-
-def get_dataset(name):
-    if name == "electricity":
-        return Electricity()
-    else:
-        return RBFm_100k()
-
-
-# 🔥 manual prequential (no CapyMOA bug issues)
-def run_prequential(dataset, model, max_instances=None):
-    correct = 0
-    total = 0
-
-    for i, instance in enumerate(dataset):
-        if max_instances and i >= max_instances:
-            break
-
-        pred = model.predict(instance)
-        true = int(instance.java_instance.getData().classValue())
-
-        if pred == true:
-            correct += 1
-
-        total += 1
-
-        model.train(instance)
-
-    accuracy = correct / total if total else 0
-
-    return accuracy, 0, 0   # recall/precision optional
-
-
-with open("results.csv", "w", newline="") as f:
-    writer = csv.writer(f)
-
-    writer.writerow([
-        "student id",
-        "dataset",
-        "knn identifier",
-        "window size",
-        "k",
-        "accuracy",
-        "recall",
-        "precision",
-        "wallclock"
-    ])
-
-    for dataset_name in ["electricity", "rbf"]:
-        for algo_name, AlgoClass in algorithms:
-            for k, w in configs:
-
-                print(f"Running: {algo_name} | {dataset_name} | k={k} | w={w}")
-
-                dataset = get_dataset(dataset_name)
-                schema = dataset.get_schema()
-
-                model = AlgoClass(schema, k=k, window_size=w)
-
-                start = time.time()
-
-                max_instances = 50000 if dataset_name == "rbf" else None
-
-                acc, rec, prec = run_prequential(dataset, model, max_instances)
-                print(f"✅ Accuracy: {round(acc*100, 2)}%")
-
-                end = time.time()
-
-                writer.writerow([
-                    STUDENT_ID,
-                    dataset_name,
-                    algo_name,
-                    w,
-                    k,
-                    round(acc, 3),
-                    round(rec, 3),
-                    round(prec, 3),
-                    round(end - start, 3)
-                ])
-
-print("✅ DONE! results.csv generated")
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSE Watchlist</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:#fff; --bg2:#f5f5f4; --bg3:#efefed;
+  --text:#1a1a18; --text2:#6b6b67; --text3:#9b9b97;
+  --bdr:rgba(0,0,0,0.13); --bdr2:rgba(0,0,0,0.22);
+  --r8:8px; --r12:12px;
+  --gbg:#EAF3DE; --gtx:#3B6D11;
+  --rbg:#FCEBEB; --rtx:#A32D2D;
+  --bbg:#E6F1FB; --btx:#185FA5;
+  --abg:#FAEEDA; --atx:#854F0B;
+  --pbg:#EEEDFE; --ptx:#534AB7;
+  --kbg:#FBEAF0; --ktx:#993556;
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    --bg:#1e1e1c; --bg2:#2a2a28; --bg3:#333330;
+    --text:#f0f0ee; --text2:#a0a09c; --text3:#6b6b67;
+    --bdr:rgba(255,255,255,0.12); --bdr2:rgba(255,255,255,0.22);
+    --gbg:#173404; --gtx:#C0DD97;
+    --rbg:#501313; --rtx:#F7C1C1;
+    --bbg:#042C53; --btx:#B5D4F4;
+    --abg:#412402; --atx:#FAC775;
+    --pbg:#26215C; --ptx:#CECBF6;
+    --kbg:#4B1528; --ktx:#F4C0D1;
+  }
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg3);color:var(--text);min-height:100vh;padding:1.5rem 1rem;}
+.wrap{max-width:1000px;margin:0 auto;}
+.card{background:var(--bg);border-radius:var(--r12);border:0.5px solid var(--bdr);padding:1.25rem 1.5rem;margin-bottom:1rem;}
+.hdr{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:1.25rem;}
+.hdr h1{font-size:22px;font-weight:500;}
+.hdr .sub{font-size:13px;color:var(--text2);margin-top:3px;}
+.hdr-r{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.badge{font-size:12px;padding:4px 12px;border-radius:20px;font-weight:500;white-space:nowrap;}
+.b-open{background:var(--gbg);color:var(--gtx);}
+.b-closed{background:var(--rbg);color:var(--rtx);}
+.b-neu{background:var(--bg2);color:var(--text2);}
+button.btn{height:34px;padding:0 14px;font-size:13px;border:0.5px solid var(--bdr2);border-radius:var(--r8);background:var(--bg);color:var(--text);cursor:pointer;}
+button.btn:hover{background:var(--bg2);}
+
+/* Add form */
+.aform{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:1.25rem;padding:1rem;background:var(--bg2);border-radius:var(--r12);border:0.5px solid var(--bdr);}
+.fld{display:flex;flex-direction:column;gap:4px;}
+.fld label{font-size:12px;color:var(--text2);}
+.fld input,.fld select{height:36px;padding:0 10px;font-size:13px;border:0.5px solid var(--bdr2);border-radius:var(--r8);background:var(--bg);color:var(--text);outline:none;}
+.fld input:focus,.fld select:focus{border-color:#378ADD;box-shadow:0 0 0 2px rgba(55,138,221,.15);}
+#f-min,#f-max{width:90px;}
+#f-source{width:135px;}
+#f-note{width:155px;}
+
+/* Ticker autocomplete */
+.tk-wrap{position:relative;}
+#f-ticker{width:170px;height:36px;padding:0 28px 0 10px;font-size:13px;border:0.5px solid var(--bdr2);border-radius:var(--r8);background:var(--bg);color:var(--text);outline:none;text-transform:uppercase;}
+#f-ticker:focus{border-color:#378ADD;box-shadow:0 0 0 2px rgba(55,138,221,.15);}
+#f-ticker.ok{border-color:#639922;}
+#f-ticker.err{border-color:#E24B4A;}
+.tk-x{position:absolute;right:7px;top:50%;transform:translateY(-50%);background:none;border:none;font-size:13px;color:var(--text3);cursor:pointer;padding:0;line-height:1;display:none;}
+.ddmenu{position:absolute;top:calc(100% + 4px);left:0;width:230px;background:var(--bg);border:0.5px solid var(--bdr2);border-radius:var(--r8);box-shadow:0 6px 20px rgba(0,0,0,.14);z-index:300;max-height:240px;overflow-y:auto;display:none;}
+.ddmenu.open{display:block;}
+.dd-row{padding:8px 12px;font-size:13px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;color:var(--text);}
+.dd-row:hover,.dd-row.hi{background:var(--bg2);}
+.dd-px{font-size:12px;color:var(--text2);}
+.dd-none{padding:10px 12px;font-size:13px;color:var(--text2);}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;padding:8px 10px;font-size:12px;font-weight:500;color:var(--text2);border-bottom:0.5px solid var(--bdr);}
+td{padding:10px 10px;border-bottom:0.5px solid var(--bdr);vertical-align:middle;}
+tbody tr:last-child td{border-bottom:none;}
+.r-ok{background:transparent;}
+.r-up{background:var(--gbg);}
+.r-dn{background:var(--rbg);}
+.tkcell{font-weight:500;font-size:14px;}
+.pu{color:var(--gtx);font-weight:500;}
+.pd{color:var(--rtx);font-weight:500;}
+.pn{color:var(--text);font-weight:500;}
+.tag{font-size:11px;padding:3px 8px;border-radius:20px;display:inline-block;white-space:nowrap;}
+.t-min{background:var(--rbg);color:var(--rtx);}
+.t-max{background:var(--gbg);color:var(--gtx);}
+.t-up{background:var(--gbg);color:var(--gtx);}
+.t-dn{background:var(--rbg);color:var(--rtx);}
+.t-watch{font-size:12px;color:var(--text3);}
+.s-self{background:var(--bbg);color:var(--btx);}
+.s-biniyog{background:var(--abg);color:var(--atx);}
+.s-expert{background:var(--pbg);color:var(--ptx);}
+.s-rasel{background:var(--kbg);color:var(--ktx);}
+.xbtn{font-size:13px;color:var(--text3);cursor:pointer;background:none;border:0.5px solid transparent;padding:4px 8px;border-radius:6px;transition:all .15s;}
+.xbtn:hover{color:var(--rtx);background:var(--rbg);border-color:var(--rtx);}
+.empty td{text-align:center;padding:2.5rem;color:var(--text2);}
+.foot{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:1rem;font-size:12px;color:var(--text2);border-top:0.5px solid var(--bdr);padding-top:.75rem;}
+@media(max-width:680px){.col-note,.col-src{display:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+
+  <div class="hdr">
+    <div>
+      <h1>DSE Watchlist</h1>
+      <div class="sub" id="status-line">Loading tickers…</div>
+    </div>
+    <div class="hdr-r">
+      <span class="badge b-neu" id="mkt-badge">—</span>
+      <span class="badge b-neu" id="cnt-badge">0 stocks</span>
+      <button class="btn" id="refresh-btn">Refresh ↻</button>
+      <button class="btn" id="notif-btn">Enable alerts 🔔</button>
+    </div>
+  </div>
+
+  <!-- Quick command bar -->
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:0.75rem;padding:0.75rem 1rem;background:var(--bg2);border-radius:var(--r8);border:0.5px solid var(--bdr);">
+    <span style="font-size:12px;color:var(--text2);white-space:nowrap;">⚡ Quick add:</span>
+    <input type="text" id="quick-input" placeholder='e.g.  SPCL min=55   or   SQURPHARMA min=200 max=230 source=Expert   or   remove SPCL'
+      style="flex:1;height:34px;padding:0 10px;font-size:13px;border:0.5px solid var(--bdr2);border-radius:var(--r8);background:var(--bg);color:var(--text);outline:none;"
+      autocomplete="off" />
+    <button class="btn" id="quick-btn">Run</button>
+    <span id="quick-msg" style="font-size:12px;color:var(--gtx);min-width:80px;"></span>
+  </div>
+
+  <div class="aform">
+    <div class="fld">
+      <label>Ticker</label>
+      <div class="tk-wrap" id="tk-wrap">
+        <input type="text" id="f-ticker" placeholder="Search ticker…" autocomplete="off" />
+        <button class="tk-x" id="tk-x">✕</button>
+        <div class="ddmenu" id="ddmenu"></div>
+      </div>
+    </div>
+    <div class="fld"><label>Min / support</label><input type="number" id="f-min" placeholder="e.g. 200" /></div>
+    <div class="fld"><label>Max / breakout</label><input type="number" id="f-max" placeholder="e.g. 230" /></div>
+    <div class="fld">
+      <label>Source</label>
+      <select id="f-source">
+        <option value="Self">Self analysis</option>
+        <option value="Biniyog">Biniyog</option>
+        <option value="Expert">Expert</option>
+        <option value="Rasel">Rasel</option>
+      </select>
+    </div>
+    <div class="fld"><label>Note (optional)</label><input type="text" id="f-note" placeholder="e.g. breakout watch" /></div>
+    <div class="fld"><label>&nbsp;</label><button class="btn" id="add-btn">+ Add stock</button></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:15%">Ticker</th>
+        <th style="width:11%">Last price</th>
+        <th style="width:10%">Min</th>
+        <th style="width:10%">Max</th>
+        <th style="width:11%">Status</th>
+        <th style="width:13%" class="col-src">Source</th>
+        <th class="col-note">Note</th>
+        <th style="width:7%">Remove</th>
+      </tr>
+    </thead>
+    <tbody id="tbl-body"></tbody>
+  </table>
+
+  <div class="foot">
+    <span id="alert-log">No alerts yet.</span>
+    <span>Auto-refresh every 60s · Trading hours 10:00–14:30 BD time</span>
+  </div>
+
+</div>
+</div>
+
+<script>
+(function(){
+  /* ---- State ---- */
+  var watchlist = [];
+  var prices = {};
+  var allTickers = [];
+  var alertLog = [];
+  var audioCtx = null;
+  var selTicker = '';
+  var ddIdx = -1;
+  var saving = false;
+
+  var SHEET_URL = 'https://script.google.com/macros/s/AKfycbzur5ARJ9-NlcKM19fCN70t878bxOjPh_kFdeBtwL0amUfErMX4LFyB-XnBKylb7Xx8WA/exec';
+  var DSE_URL = 'https://www.dsebd.org/datafile/quotes.txt';
+  var PROXIES = [
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(DSE_URL),
+    'https://corsproxy.io/?url=' + encodeURIComponent(DSE_URL),
+    'https://proxy.cors.sh/' + DSE_URL,
+  ];
+  var SRCCLS = { Self:'s-self', Biniyog:'s-biniyog', Expert:'s-expert', Rasel:'s-rasel' };
+
+  /* ---- Static DSE ticker list (as of May 2026) ---- */
+  allTickers = ["1JANATAMF","1STPRIMFMF","AAMRANET","AAMRATECH","ABB1STMF","ABBANK","ACFL","ACI","ACIFORMULA","ACMELAB","ACMEPL","ACTIVEFINE","ADNTEL","ADVENT","AFCAGRO","AFTABAUTO","AGNISYSL","AGRANINS","AIBL1STIMF","AIL","AL-HAJTEX","ALARABANK","ALIF","ALLTEX","AMANFEED","AMBEEPHA","AMCL(PRAN)","ANLIMAYARN","ANWARGALV","AOL","APEXFOODS","APEXFOOT","APEXSPINN","APEXTANRY","APOLOISPAT","ARAMIT","ARAMITCEM","ARGONDENIM","ASIAINS","ASIAPACINS","ASIATICLAB","ATLASBANG","AZIZPIPES","BANGAS","BANKASIA","BARKAPOWER","BATASHOE","BATBC","BAYLEASING","BBS","BBSCABLES","BDAUTOCA","BDCOM","BDFINANCE","BDLAMPS","BDSERVICE","BDTHAI","BDTHAIFOOD","BDWELDING","BEACHHATCH","BEACONPHAR","BENGALWTL","BERGERPBL","BESTHLDNG","BEXIMCO","BGIC","BIFC","BNICL","BPML","BPPL","BRACBANK","BSC","BSCPLC","BSRMLTD","BSRMSTEEL","BXPHARMA","CAPITECGBF","CAPMBDBLMF","CAPMIBBLMF","CENTRALINS","CENTRALPHL","CITYBANK","CITYGENINS","CLICL","CNATEX","CONFIDCEM","CONTININS","COPPERTECH","CROWNCEMNT","CRYSTALINS","CVOPRL","DACCADYE","DAFODILCOM","DBH","DBH1STMF","DELTALIFE","DELTASPINN","DESCO","DESHBANDHU","DGIC","DHAKABANK","DHAKAINS","DOMINAGE","DOREENPWR","DSHGARME","DSSL","DULAMIACOT","DUTCHBANGL","EASTERNINS","EASTLAND","EASTRNLUB","EBL","EBL1STMF","EBLNRBMF","ECABLES","EGEN","EHL","EIL","EMERALDOIL","ENVOYTEX","EPGL","ESQUIRENIT","ETL","EXIM1STMF","EXIMBANK","FAMILYTEX","FARCHEM","FAREASTFIN","FAREASTLIF","FASFIN","FBFIF","FEDERALINS","FEKDIL","FINEFOODS","FIRSTFIN","FIRSTSBANK","FORTUNE","FUWANGCER","FUWANGFOOD","GBBPOWER","GEMINISEA","GENEXIL","GENNEXT","GHAIL","GHCL","GIB","GLDNJMF","GLOBALINS","GOLDENSON","GP","GPHISPAT","GQBALLPEN","GRAMEENS2","GREENDELMF","GREENDELT","GSPFINANCE","HAKKANIPUL","HAMI","HEIDELBCEM","HFL","HRTEX","HWAWELLTEX","IBNSINA","IBP","ICB","ICB3RDNRB","ICBAGRANI1","ICBAMCL2ND","ICBEPMF1S1","ICBIBANK","ICBSONALI1","ICICL","IDLC","IFADAUTOS","IFIC","IFIC1STMF","IFILISLMF1","ILFSL","INDEXAGRO","INTECH","INTRACO","IPDC","ISLAMIBANK","ISLAMICFIN","ISLAMIINS","ISNLTD","ITC","JAMUNABANK","JAMUNAOIL","JANATAINS","JHRML","JMISMDL","JUTESPINN","KARNAPHULI","KAY&QUE","KBPPWBIL","KDSALTD","KEYACOSMET","KOHINOOR","KPCL","KPPL","KTL","LANKABAFIN","LEGACYFOOT","LHB","LIBRAINFU","LINDEBD","LOVELLO","LRBDL","LRGLOBMF1","MAGURAPLEX","MAKSONSPIN","MALEKSPIN","MARICO","MATINSPINN","MBL1STMF","MEGCONMILK","MEGHNACEM","MEGHNAINS","MEGHNALIFE","MEGHNAPET","MERCANBANK","MERCINS","METROSPIN","MHSML","MIDASFIN","MIDLANDBNK","MIRACLEIND","MIRAKHTER","MITHUNKNIT","MJLBD","MLDYEING","MONNOAGML","MONNOCERA","MONNOFABR","MONOSPOOL","MPETROLEUM","MTB","NAHEEACP","NATLIFEINS","NAVANACNG","NAVANAPHAR","NBL","NCCBANK","NCCBLMF1","NEWLINE","NFML","NHFIL","NITOLINS","NORTHERN","NORTHRNINS","NPOLYMER","NRBBANK","NRBCBANK","NTC","NTLTUBES","NURANI","OAL","OIMEX","OLYMPIC","ONEBANKPLC","ORIONINFU","ORIONPHARM","PADMALIFE","PADMAOIL","PARAMOUNT","PDL","PENINSULA","PEOPLESINS","PF1STMF","PHARMAID","PHENIXINS","PHOENIXFIN","PHPMF1","PIONEERINS","PLFSL","POPULAR1MF","POPULARLIF","POWERGRID","PRAGATIINS","PRAGATILIF","PREMIERBAN","PREMIERCEM","PREMIERLEA","PRIME1ICBA","PRIMEBANK","PRIMEFIN","PRIMEINSUR","PRIMELIFE","PRIMETEX","PROGRESLIF","PROVATIINS","PTL","PUBALIBANK","PURABIGEN","QUASEMIND","QUEENSOUTH","RAHIMAFOOD","RAHIMTEXT","RAKCERAMIC","RANFOUNDRY","RDFOOD","RECKITTBEN","REGENTTEX","RELIANCE1","RELIANCINS","RENATA","RENWICKJA","REPUBLIC","RINGSHINE","ROBI","RSRMSTEEL","RUNNERAUTO","RUPALIBANK","RUPALIINS","RUPALILIFE","SAFKOSPINN","SAIFPOWER","SAIHAMCOT","SAIHAMTEX","SALAMCRST","SALVO","SAMATALETH","SAMORITA","SANDHANINS","SAPORTL","SAVAREFR","SBACBANK","SEAPEARL","SEMLFBSLGF","SEMLIBBLSF","SEMLLECMF","SHAHJABANK","SHARPIND","SHASHADNIM","SHEPHERD","SHURWID","SHYAMPSUG","SIBL","SICL","SILCOPHL","SILVAPHL","SIMTEX","SINGERBD","SINOBANGLA","SIPLC","SKTRIMS","SLIPLC","SONALIANSH","SONALIPAPR","SONARBAINS","SONARGAON","SOUTHEASTB","SPCERAMICS","SPCL","SQUARETEXT","SQURPHARMA","SSSTEEL","STANCERAM","STANDARINS","STANDBANKL","STYLECRAFT","SUMITPOWER","SUNLIFEINS","TAKAFULINS","TALLUSPIN","TAMIJTEX","TECHNODRUG","TILIL","TITASGAS","TOSRIFA","TRUSTB1MF","TRUSTBANK","TUNGHAI","UCB","UNILEVERCL","UNIONBANK","UNIONCAP","UNIONINS","UNIQUEHRL","UNITEDFIN","UNITEDINS","UPGDCL","USMANIAGL","UTTARABANK","UTTARAFIN","VAMLBDMF1","VAMLRBBF","VFSTDL","WALTONHIL","WATACHEM","WMSHIPYARD","YPL","ZAHEENSPIN","ZAHINTEX","ZEALBANGLA"];
+
+  /* ---- Google Sheets save ---- */
+  function save(){
+    if(saving) return;
+    saving = true;
+    var sl = document.getElementById('status-line');
+    var prev = sl.textContent;
+    sl.textContent = 'Saving to Google Sheets…';
+    var payload = { action: 'save', watchlist: watchlist.map(function(s){
+      return { ticker:s.ticker, min:s.min, max:s.max, source:s.source, note:s.note };
+    })};
+    fetch(SHEET_URL, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      saving = false;
+      sl.textContent = prev;
+      if(d.status !== 'ok') alert('Save failed: ' + (d.msg || 'unknown error'));
+    })
+    .catch(function(){
+      saving = false;
+      sl.textContent = prev;
+      alert('Could not save to Google Sheets. Check your connection.');
+    });
+  }
+
+  /* ---- Google Sheets load ---- */
+  function loadFromSheet(callback){
+    var sl = document.getElementById('status-line');
+    sl.textContent = 'Loading watchlist from Google Sheets…';
+    fetch(SHEET_URL)
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.status === 'ok'){
+          watchlist = (d.data || []).filter(function(s){ return s.ticker; }).map(function(s){
+            return { ticker:s.ticker, min:s.min||'', max:s.max||'', source:s.source||'Self', note:s.note||'', breachedUp:false, breachedDown:false };
+          });
+          updateCount();
+          renderTable();
+        }
+        if(callback) callback();
+      })
+      .catch(function(){
+        sl.textContent = 'Could not load from Google Sheets. Check URL or connection.';
+        if(callback) callback();
+      });
+  }
+
+  /* ---- Market hours (BD = UTC+6) ---- */
+  function isOpen(){
+    var bd = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Dhaka'}));
+    var m = bd.getHours()*60 + bd.getMinutes();
+    return m >= 600 && m <= 870;
+  }
+  function updateMktBadge(){
+    var el = document.getElementById('mkt-badge');
+    if(isOpen()){ el.textContent='Market open'; el.className='badge b-open'; }
+    else { el.textContent='Market closed'; el.className='badge b-closed'; }
+  }
+
+  /* ---- Fetch prices only (tickers are static) ---- */
+  function parsePrices(txt){
+    var np={};
+    txt.split('\n').forEach(function(line){
+      var p=line.trim().split(/\s+/);
+      if(p.length>=2){
+        var tk=p[0].trim();
+        var pr=parseFloat(p[p.length-1]);
+        if(tk && !isNaN(pr) && !/^(Instr|Price|Index|Date|Time|&)/.test(tk)){
+          np[tk]=pr;
+        }
+      }
+    });
+    return np;
+  }
+
+  function fetchWithProxy(idx){
+    if(idx >= PROXIES.length){
+      document.getElementById('status-line').textContent='Price fetch failed — all proxies down. Ticker search still works. Try refreshing.';
+      return;
+    }
+    fetch(PROXIES[idx])
+      .then(function(r){
+        if(!r.ok) throw new Error('bad status');
+        return r.text();
+      })
+      .then(function(txt){
+        var np = parsePrices(txt);
+        if(Object.keys(np).length < 10) throw new Error('too few results');
+        prices = np;
+        var t=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        document.getElementById('status-line').textContent='Last updated: '+t+' · '+Object.keys(prices).length+' prices loaded';
+        renderTable();
+        checkAlerts();
+      })
+      .catch(function(){
+        fetchWithProxy(idx+1);
+      });
+  }
+
+  function fetchPrices(){ fetchWithProxy(0); }
+
+  /* ---- Dropdown ---- */
+  var inpEl    = document.getElementById('f-ticker');
+  var ddEl     = document.getElementById('ddmenu');
+  var tkXEl    = document.getElementById('tk-x');
+
+  function openDd(){
+    var q = inpEl.value.trim().toUpperCase();
+    ddIdx = -1;
+    tkXEl.style.display = q ? 'block' : 'none';
+    var matches = q
+      ? allTickers.filter(function(t){ return t.indexOf(q) !== -1; }).slice(0,60)
+      : allTickers.slice(0,60);
+    if(matches.length===0){
+      ddEl.innerHTML='<div class="dd-none">No match — try a different search</div>';
+    } else {
+      ddEl.innerHTML = matches.map(function(t){
+        var px = prices[t]!==undefined ? '<span class="dd-px">'+prices[t].toFixed(1)+'</span>' : '';
+        return '<div class="dd-row" data-t="'+t+'"><span>'+t+'</span>'+px+'</div>';
+      }).join('');
+    }
+    ddEl.classList.add('open');
+  }
+
+  function closeDd(){ ddEl.classList.remove('open'); ddIdx=-1; }
+
+  function pickTicker(t){
+    selTicker = t;
+    inpEl.value = t;
+    inpEl.classList.add('ok');
+    inpEl.classList.remove('err');
+    tkXEl.style.display = 'block';
+    closeDd();
+    document.getElementById('f-min').focus();
+  }
+
+  function clearTicker(){
+    selTicker='';
+    inpEl.value='';
+    inpEl.classList.remove('ok','err');
+    tkXEl.style.display='none';
+    closeDd();
+    inpEl.focus();
+  }
+
+  inpEl.addEventListener('input', function(){
+    selTicker='';
+    inpEl.classList.remove('ok','err');
+    openDd();
+  });
+  inpEl.addEventListener('focus', openDd);
+  inpEl.addEventListener('keydown', function(e){
+    var items = ddEl.querySelectorAll('.dd-row');
+    if(!ddEl.classList.contains('open') || items.length===0) return;
+    if(e.key==='ArrowDown'){
+      e.preventDefault();
+      ddIdx = Math.min(ddIdx+1, items.length-1);
+      items.forEach(function(el,i){ el.classList.toggle('hi', i===ddIdx); });
+      items[ddIdx].scrollIntoView({block:'nearest'});
+    } else if(e.key==='ArrowUp'){
+      e.preventDefault();
+      ddIdx = Math.max(ddIdx-1, 0);
+      items.forEach(function(el,i){ el.classList.toggle('hi', i===ddIdx); });
+      items[ddIdx].scrollIntoView({block:'nearest'});
+    } else if(e.key==='Enter'){
+      e.preventDefault();
+      if(ddIdx>=0 && items[ddIdx]) pickTicker(items[ddIdx].dataset.t);
+      else if(items.length===1) pickTicker(items[0].dataset.t);
+    } else if(e.key==='Escape'){
+      closeDd();
+    }
+  });
+
+  /* event delegation on dropdown */
+  ddEl.addEventListener('mousedown', function(e){
+    var row = e.target.closest('.dd-row');
+    if(row){ e.preventDefault(); pickTicker(row.dataset.t); }
+  });
+
+  tkXEl.addEventListener('click', clearTicker);
+
+  document.addEventListener('click', function(e){
+    if(!document.getElementById('tk-wrap').contains(e.target)) closeDd();
+  });
+
+  /* ---- Add stock ---- */
+  document.getElementById('add-btn').addEventListener('click', function(){
+    /* Accept selTicker (picked from dd) OR typed value if it exactly matches a known ticker */
+    var typed = inpEl.value.trim().toUpperCase();
+    var ticker = selTicker;
+    if(!ticker && allTickers.indexOf(typed) !== -1) ticker = typed;
+
+    if(!ticker){
+      inpEl.classList.add('err');
+      if(typed){
+        alert('"'+typed+'" was not found in DSE ticker list.\nPlease pick a ticker from the dropdown.');
+      } else {
+        alert('Please type and select a ticker from the dropdown.');
+      }
+      inpEl.focus();
+      return;
+    }
+
+    if(watchlist.some(function(s){ return s.ticker===ticker; })){
+      alert(ticker+' is already in your watchlist.');
+      return;
+    }
+
+    var min = document.getElementById('f-min').value.trim();
+    var max = document.getElementById('f-max').value.trim();
+    var source = document.getElementById('f-source').value;
+    var note = document.getElementById('f-note').value.trim();
+
+    watchlist.push({ ticker:ticker, min:min, max:max, source:source, note:note, breachedUp:false, breachedDown:false });
+    save();
+
+    /* Reset form */
+    clearTicker();
+    document.getElementById('f-min').value='';
+    document.getElementById('f-max').value='';
+    document.getElementById('f-note').value='';
+
+    updateCount();
+    renderTable();
+    checkAlerts();
+  });
+
+  /* ---- Delete stock (event delegation on tbody) ---- */
+  document.getElementById('tbl-body').addEventListener('click', function(e){
+    var btn = e.target.closest('.xbtn');
+    if(!btn) return;
+    var ticker = btn.dataset.ticker;
+    if(!ticker) return;
+    if(!confirm('Remove '+ticker+' from watchlist?')) return;
+    watchlist = watchlist.filter(function(s){ return s.ticker !== ticker; });
+    save();
+    updateCount();
+    renderTable();
+  });
+
+  /* ---- Alerts ---- */
+  function checkAlerts(){
+    watchlist.forEach(function(s){
+      var p = prices[s.ticker];
+      if(p===undefined) return;
+      if(s.max && p >= parseFloat(s.max) && !s.breachedUp){
+        s.breachedUp=true; save(); triggerAlert(s.ticker, p, 'MAX breakout ▲', 'up');
+      } else if(!s.max || p < parseFloat(s.max)){ s.breachedUp=false; }
+      if(s.min && p <= parseFloat(s.min) && !s.breachedDown){
+        s.breachedDown=true; save(); triggerAlert(s.ticker, p, 'below MIN support ▼', 'down');
+      } else if(!s.min || p > parseFloat(s.min)){ s.breachedDown=false; }
+    });
+  }
+
+  function triggerAlert(ticker, price, type, dir){
+    var t = new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    var msg = t+'  '+ticker+' @ '+price.toFixed(1)+' — '+type;
+    alertLog.unshift(msg);
+    if(alertLog.length>5) alertLog.pop();
+    document.getElementById('alert-log').textContent = alertLog.join('   |   ');
+    playBeep(dir);
+    if(typeof Notification!=='undefined' && Notification.permission==='granted')
+      new Notification('DSE Alert: '+ticker, {body: ticker+' @ '+price.toFixed(1)+' — '+type});
+  }
+
+  function playBeep(dir){
+    try{
+      if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+      var o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.frequency.value = dir==='up' ? 880 : 440;
+      g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.5);
+      o.start(); o.stop(audioCtx.currentTime+0.5);
+    }catch(e){}
+  }
+
+  document.getElementById('notif-btn').addEventListener('click', function(){
+    if(typeof Notification!=='undefined')
+      Notification.requestPermission().then(function(p){
+        alert(p==='granted' ? 'Desktop notifications enabled!' : 'Permission denied — you can enable in browser settings.');
+      });
+  });
+
+  /* ---- Render ---- */
+  function updateCount(){
+    document.getElementById('cnt-badge').textContent = watchlist.length+' stock'+(watchlist.length!==1?'s':'');
+  }
+
+  function renderTable(){
+    var tbody = document.getElementById('tbl-body');
+    if(watchlist.length===0){
+      tbody.innerHTML='<tr class="empty"><td colspan="8">No stocks yet — add one above</td></tr>';
+      return;
+    }
+    tbody.innerHTML = watchlist.map(function(s){
+      var p=prices[s.ticker], hp=p!==undefined;
+      var rCls='r-ok', pCls='pn', stHtml='<span class="t-watch">Watching</span>';
+      if(hp){
+        if(s.max && p>=parseFloat(s.max)){ rCls='r-up'; pCls='pu'; stHtml='<span class="tag t-up">▲ Breakout</span>'; }
+        else if(s.min && p<=parseFloat(s.min)){ rCls='r-dn'; pCls='pd'; stHtml='<span class="tag t-dn">▼ Support</span>'; }
+      }
+      var srcCls = SRCCLS[s.source] || 's-self';
+      return '<tr class="'+rCls+'">'
+        +'<td class="tkcell">'+s.ticker+'</td>'
+        +'<td><span class="'+pCls+'">'+(hp ? p.toFixed(1) : '—')+'</span></td>'
+        +'<td>'+(s.min?'<span class="tag t-min">'+s.min+'</span>':'<span style="color:var(--text3)">—</span>')+'</td>'
+        +'<td>'+(s.max?'<span class="tag t-max">'+s.max+'</span>':'<span style="color:var(--text3)">—</span>')+'</td>'
+        +'<td>'+stHtml+'</td>'
+        +'<td class="col-src"><span class="tag '+srcCls+'">'+s.source+'</span></td>'
+        +'<td class="col-note" style="font-size:12px;color:var(--text2);">'+(s.note||'')+'</td>'
+        +'<td><button class="xbtn" data-ticker="'+s.ticker+'" title="Remove '+s.ticker+'">✕ Remove</button></td>'
+      +'</tr>';
+    }).join('');
+  }
+
+  /* ---- Quick command bar ---- */
+  function quickMsg(msg, isErr){
+    var el = document.getElementById('quick-msg');
+    el.textContent = msg;
+    el.style.color = isErr ? 'var(--rtx)' : 'var(--gtx)';
+    setTimeout(function(){ el.textContent=''; }, 3000);
+  }
+
+  function runQuickCommand(){
+    var raw = document.getElementById('quick-input').value.trim();
+    if(!raw) return;
+
+    // REMOVE command: "remove TICKER" or "delete TICKER"
+    var removeMatch = raw.match(/^(remove|delete)\s+(\S+)$/i);
+    if(removeMatch){
+      var tk = removeMatch[2].toUpperCase();
+      if(!watchlist.some(function(s){ return s.ticker===tk; })){
+        quickMsg(tk+' not in watchlist', true); return;
+      }
+      watchlist = watchlist.filter(function(s){ return s.ticker!==tk; });
+      save(); updateCount(); renderTable();
+      quickMsg(tk+' removed ✓');
+      document.getElementById('quick-input').value='';
+      return;
+    }
+
+    // ADD command: "TICKER [min=X] [max=X] [source=X] [note=X]"
+    var parts = raw.split(/\s+/);
+    var ticker = parts[0].toUpperCase();
+
+    if(allTickers.indexOf(ticker) === -1){
+      quickMsg('"'+ticker+'" not in DSE list', true); return;
+    }
+    if(watchlist.some(function(s){ return s.ticker===ticker; })){
+      quickMsg(ticker+' already in watchlist', true); return;
+    }
+
+    var min='', max='', source='Self', note='';
+    // support shorthand: TICKER 55 (just a number = min)
+    if(parts.length===2 && !isNaN(parts[1])){
+      min = parts[1];
+    } else {
+      parts.slice(1).forEach(function(p){
+        var kv = p.split('=');
+        if(kv.length===2){
+          var k=kv[0].toLowerCase(), v=kv[1];
+          if(k==='min') min=v;
+          else if(k==='max') max=v;
+          else if(k==='source') source=v.charAt(0).toUpperCase()+v.slice(1);
+          else if(k==='note') note=v;
+        }
+      });
+    }
+
+    watchlist.push({ ticker:ticker, min:min, max:max, source:source, note:note, breachedUp:false, breachedDown:false });
+    save(); updateCount(); renderTable(); checkAlerts();
+    quickMsg(ticker+' added ✓');
+    document.getElementById('quick-input').value='';
+  }
+
+  document.getElementById('quick-btn').addEventListener('click', runQuickCommand);
+  document.getElementById('quick-input').addEventListener('keydown', function(e){
+    if(e.key==='Enter') runQuickCommand();
+  });
+
+  /* ---- Refresh button ---- */
+  document.getElementById('refresh-btn').addEventListener('click', fetchPrices);
+
+  /* ---- Init ---- */
+  updateMktBadge();
+  updateCount();
+  renderTable();
+  loadFromSheet(function(){
+    document.getElementById('status-line').textContent = allTickers.length + ' tickers ready · Fetching prices…';
+    fetchPrices();
+  });
+  setInterval(function(){ if(isOpen()) fetchPrices(); updateMktBadge(); }, 60000);
+  setInterval(updateMktBadge, 30000);
+
+})();
+</script>
+</body>
+</html>
