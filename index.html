@@ -167,7 +167,7 @@ tbody tr:last-child td{border-bottom:none;}
 
   <div class="foot">
     <span id="alert-log">No alerts yet.</span>
-    <span>Auto-refresh every 60s · Trading hours 10:00–14:30 BD time</span>
+    <span>⏱ Last price refresh: <span id="last-refresh-time">—</span> &nbsp;·&nbsp; Auto-refresh every 60s · Trading hours 10:00–14:30 BD time</span>
   </div>
 
 </div>
@@ -300,6 +300,8 @@ tbody tr:last-child td{border-bottom:none;}
         prices = np;
         var t=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
         document.getElementById('status-line').textContent='Last updated: '+t+' · '+Object.keys(prices).length+' prices loaded';
+        var lrt = document.getElementById('last-refresh-time');
+        if(lrt) lrt.textContent = t;
         renderTable();
         checkAlerts();
       })
