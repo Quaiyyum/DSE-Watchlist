@@ -219,6 +219,7 @@ tbody tr:last-child td{border-bottom:none;}
   /* ---- Google Sheets save via JSONP ---- */
   function save(){
     if(saving) return;
+    if(watchlist.length === 0) return; /* never overwrite sheet with empty list */
     saving = true;
     var sl = document.getElementById('status-line');
     var prev = sl.textContent;
@@ -310,7 +311,11 @@ tbody tr:last-child td{border-bottom:none;}
       });
   }
 
-  function fetchPrices(){ fetchWithProxy(0); }
+  function fetchPrices(){
+    var btn = document.getElementById('refresh-btn');
+    if(btn){ btn.textContent = 'Refreshing…'; setTimeout(function(){ btn.textContent='Refresh ↻'; }, 3000); }
+    fetchWithProxy(0);
+  }
 
   /* ---- Dropdown ---- */
   var inpEl    = document.getElementById('f-ticker');
@@ -457,10 +462,10 @@ tbody tr:last-child td{border-bottom:none;}
       var p = prices[s.ticker];
       if(p===undefined) return;
       if(s.max && p >= parseFloat(s.max) && !s.breachedUp){
-        s.breachedUp=true; save(); triggerAlert(s.ticker, p, 'MAX breakout ▲', 'up');
+        s.breachedUp=true; triggerAlert(s.ticker, p, 'MAX breakout ▲', 'up');
       } else if(!s.max || p < parseFloat(s.max)){ s.breachedUp=false; }
       if(s.min && p <= parseFloat(s.min) && !s.breachedDown){
-        s.breachedDown=true; save(); triggerAlert(s.ticker, p, 'below MIN support ▼', 'down');
+        s.breachedDown=true; triggerAlert(s.ticker, p, 'below MIN support ▼', 'down');
       } else if(!s.min || p > parseFloat(s.min)){ s.breachedDown=false; }
     });
   }
@@ -595,16 +600,21 @@ tbody tr:last-child td{border-bottom:none;}
   /* ---- Refresh button ---- */
   document.getElementById('refresh-btn').addEventListener('click', fetchPrices);
 
-  /* ---- Init ---- */
+  /* ---- Init — load watchlist + prices in parallel ---- */
   updateMktBadge();
   updateCount();
   renderTable();
+
+  // Start both simultaneously
   loadFromSheet(function(){
-    document.getElementById('status-line').textContent = allTickers.length + ' tickers ready · Fetching prices…';
-    fetchPrices();
+    // Watchlist is ready — if prices already arrived, render with them
+    renderTable();
+    checkAlerts();
   });
-  setInterval(function(){ if(isOpen()) fetchPrices(); updateMktBadge(); }, 60000);
-  setInterval(updateMktBadge, 30000);
+  fetchPrices(); // don't wait for sheet — start price fetch immediately
+
+  setInterval(function(){ if(isOpen()) fetchPrices(); updateMktBadge(); }, 30000);
+  setInterval(updateMktBadge, 15000);
 
 })();
 </script>
