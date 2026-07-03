@@ -546,6 +546,13 @@ var watchlist = loadLS('dse_watch_v4', []);
 var journal   = loadLS('dse_journal_v4', []);
 var mmData    = loadLS('dse_mm_v4', {cashIns:[], cashOuts:[], rg:907962.46});
 
+
+// ── Migrate: assign _id to journal entries missing one ──
+journal = journal.map(function(j,i){
+  if(!j._id) j._id = "legacy_"+i+"_"+Date.now();
+  return j;
+});
+
 // ── MIGRATION: fix old format missing avgCost / totalCostInc ──
 portfolio = portfolio.map(function(p){
   if(!p.avgCost || isNaN(p.avgCost)){
@@ -1011,7 +1018,7 @@ document.getElementById('notif-btn').addEventListener('click',function(){
 });
 
 // ─── JOURNAL ─────────────────────────────────────────────────
-function logJournal(entry){journal.push(entry);}
+function logJournal(entry){entry._id=Date.now().toString(36)+Math.random().toString(36).slice(2);journal.push(entry);}
 
 function updateJournalTickers(){
   var sel=document.getElementById('j-f-ticker');
@@ -1095,7 +1102,7 @@ function renderJournal(){
       +'<td style="font-size:12px;color:var(--text2);">'+fmt(j.avgCostAfter)+'</td>'
       +'<td>'+pnlHtml+'</td>'
       +'<td>'+resHtml+'</td>'
-      +'<td style="font-size:12px;color:var(--text2);">'+(j.reason||'—')+'</td>'
+      +'<td><input type="text" value="'+(j.reason||"").replace(/"/g,"&quot;")+'" placeholder="write reason…" data-jid="'+j._id+'" onblur="saveJournalReason(this)" style="width:190px;height:26px;padding:0 7px;font-size:12px;border:0.5px solid var(--bdr2);border-radius:6px;background:var(--bg);color:var(--text);outline:none;font-family:inherit;" /></td>'
       +'</tr>';
   }).join('')||'<tr class="empty"><td colspan="15">No transactions yet — add a position to begin</td></tr>';
 
@@ -1237,6 +1244,15 @@ window.downloadExcel=function(tab){
     fn='moneymanager_'+date+'.xlsx';
   }
   XLSX.writeFile(wb,fn);
+};
+
+
+// ─── SAVE JOURNAL REASON ─────────────────────────────────────
+window.saveJournalReason=function(inp){
+  var id=inp.dataset.jid;
+  var val=inp.value;
+  var entry=journal.find(function(j){return j._id===id;});
+  if(entry){entry.reason=val;saveLS();saveToSheets();}
 };
 
 // ─── LOAD JULY 2026 PORTFOLIO IF EMPTY ───────────────────────
